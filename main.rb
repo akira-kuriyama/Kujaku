@@ -3,47 +3,49 @@ require 'sinatra/reloader' if development?
 require 'json'
 
 require_relative 'lib/esa_client'
-require_relative 'lib/slack_api_client'
+require_relative 'lib/slack_client'
 
-ESA_TEAM_NAME = ENV['ESA_TEAM_NAME']
+get '/' do
+  return {hello: 'Kujaku!'}.to_json
+end
 
 post '/' do
   puts '[START]'
   params = JSON.parse(request.body.read)
+  dry_run = params['dry-run']
 
   case params['type']
   when 'url_verification'
-    # サーバの正当性検証
     challenge = params['challenge']
-    return {
-      challenge: challenge
-    }.to_json
+    return { challenge: challenge }.to_json
+
   when 'event_callback'
     channel = params.dig('event', 'channel')
 
     ts = params.dig('event', 'message_ts')
     links = params.dig('event', 'links')
 
-    unfurls = {}
-    links.each do |link|
+    unfurls = links.each_with_object({}) do |link, memo|
       url = link['url']
-      next unless url =~ /\Ahttps:\/\/#{ESA_TEAM_NAME}.esa.io\/posts\/(\d+).*\z/
-      post_number = $1
-
-      esa = EsaClient.new
-      attachment = esa.get(post_number)
-
-      unfurls[url] = attachment
+      attachment = EsaClient.fetch(url)
+      memo[url] = attachment
     end
 
     payload = {
-      channel: channel,
-      ts: ts,
-      unfurls: unfurls
+        channel: channel,
+        ts: ts,
+        unfurls: unfurls
     }.to_json
 
-    slackApiClient = SlackApiClient.new
-    slackApiClient.request(payload)
+    if dry_run == 'true'
+      p "params: #{params}"
+      p "payload: #{payload}"
+    else
+      SlackClient.post(payload)
+    end
+
+  else
+    p "[LOG] other type. params: #{params}"
   end
 
   return {}.to_json
